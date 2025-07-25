@@ -1,5 +1,5 @@
 [PARAMS]
-video_file = line-yatay.mp4
+video_file = ./line-yatay.mp4
 output_video = output_segmented.mp4
 blur_val = 1
 contrast = 2.0
@@ -15,13 +15,15 @@ upper_s = 30
 upper_v = 220
 
 [COMMANDS]
-forward = HF 80 500
+forward = HF 70 10000
 turn_right = T 90
 turn_left = T -90
-right = H+ 80 500
-left = H- 80 500
+right = H+ 50 10000
+left = H- 50 10000
+stop = AS
 
 [COMM]
 baud_rate = 57600
 serial_port = /dev/ttyACM0
+serial_enabled = 0
 

@@ -1,14 +1,13 @@
 import cv2
 import numpy as np
 import configparser
-import ctypes
 import serial
 import threading
 import time
 
 # Read config file
 config = configparser.ConfigParser()
-config.read('config.txt', encoding='utf-8')
+config.read('tg-hku-auv-ms\config.txt', encoding='utf-8')
 
 def get_config_value(section, key, default, cast_func):
     try:
@@ -22,24 +21,33 @@ def get_config_str(section, key, default):
     except Exception:
         return default
 
+
 # Get screen size for maximizing collage
-user32 = ctypes.windll.user32
-screen_width = user32.GetSystemMetrics(0)
-screen_height = user32.GetSystemMetrics(1)
+
+screen_width = 960
+screen_height = 720
 
 # Get video file name from config
 video_file = get_config_str('PARAMS', 'video_file', 'line-yatay.mp4')
 
 # COMMUNICATION SETTINGS
+serial_enabled = get_config_value('COMM', 'serial_enabled', 1, int)
 baud_rate = get_config_value('COMM', 'baud_rate', 57600, int)
 serial_port = get_config_str('COMM', 'serial_port', '/dev/ttyACM0')
 
-try:
-    alacakart = serial.Serial(serial_port, baud_rate)
-    print("Connected!")
-except serial.SerialException as error:
-    print("Baud_rate: {}, Serial_port: {}".format(baud_rate, serial_port))
-    print(f"Error initializing serial communication: {error}")
+print(f"Serial enabled: {serial_enabled}")
+alacakart = None
+if serial_enabled:
+    try:
+        alacakart = serial.Serial(serial_port, baud_rate)
+        print("Connected!")
+        time.sleep(6)
+        alacakart.write(b'AB\n')
+    except serial.SerialException as error:
+        print("Baud_rate: {}, Serial_port: {}".format(baud_rate, serial_port))
+        print(f"Error initializing serial communication: {error}")
+else:
+    print("Seri iletişim devre dışı (serial_enabled=False)")
 
 # Open video file
 cap = cv2.VideoCapture(video_file)
@@ -69,33 +77,57 @@ commands = {
     'turn_right': get_config_str('COMMANDS', 'turn_right', ''),
     'turn_left': get_config_str('COMMANDS', 'turn_left', ''),
     'right': get_config_str('COMMANDS', 'right', ''),
-    'left': get_config_str('COMMANDS', 'left', '')
+    'left': get_config_str('COMMANDS', 'left', ''),
+    'stop': get_config_str('COMMANDS', 'stop', '')
 }
+
+
 
 # Shared command for serial thread
 direction = ""
 command_text = ""
 command_lock = threading.Lock()
 last_sent_command = ""
+last_command_candidate = ""
+last_command_candidate_time = 0
 
 # Serial send thread function
 def serial_sender():
-    global last_sent_command
+    global last_sent_command, last_command_candidate, last_command_candidate_time
     turn_waiting_hf = False
     while True:
-        time.sleep(2)
+        time.sleep(0.05)  # daha hızlı kontrol için bekleme süresi azaltıldı
         with command_lock:
             cmd = command_text
         if not cmd:
             continue
         cmd_stripped = cmd.strip()
+        # Eğer yeni komut önceki adaydan farklıysa, zamanı güncelle
+        if last_command_candidate != cmd:
+            last_command_candidate = cmd
+            last_command_candidate_time = time.time()
+            continue  # 1 saniye dolmadan değerlendirme
+        # 1 saniye boyunca aynı komut geldiyse ve son gönderilen komuttan farklıysa gönder
+        if (time.time() - last_command_candidate_time) < 1.0:
+            continue
+        if last_sent_command == cmd:
+            continue
         # Eğer bir dönüş komutu gönderildiyse, HF gelene kadar başka komut gönderme
         if turn_waiting_hf:
             if cmd_stripped == commands['forward']:
-                print(f"Sent to serial: {cmd}")
+                # Komut değiştiyse önce stop gönder
+                if last_sent_command != cmd:
+                    print(f"[SERIAL] STOP komutu gönderildi: {commands['stop']}")
+                    if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
+                        try:
+                            alacakart.write((commands['stop'] + '\n').encode())
+                            time.sleep(0.5)  # AS komutundan sonra 0.5 sn bekle
+                        except Exception as e:
+                            print(f"Serial send error: {e}")
+                print(f"[SERIAL] Komut gönderildi: {cmd}")
                 last_sent_command = cmd
                 turn_waiting_hf = False
-                if ('alacakart' in globals()) and hasattr(alacakart, 'is_open') and alacakart.is_open:
+                if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
                     try:
                         alacakart.write((cmd + '\n').encode())
                     except Exception as e:
@@ -106,9 +138,18 @@ def serial_sender():
             # Eğer T 90 veya T -90 gönderiliyorsa, HF gelene kadar bekleyeceğiz
             if cmd_stripped in [commands['turn_right'], commands['turn_left']]:
                 turn_waiting_hf = True
-            print(f"Sent to serial: {cmd}")
+            # Komut değiştiyse önce stop gönder
+            if last_sent_command != cmd:
+                print(f"[SERIAL] STOP komutu gönderildi: {commands['stop']}")
+                if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
+                    try:
+                        alacakart.write((commands['stop'] + '\n').encode())
+                        time.sleep(0.5)  # AS komutundan sonra 0.5 sn bekle
+                    except Exception as e:
+                        print(f"Serial send error: {e}")
+            print(f"[SERIAL] Komut gönderildi: {cmd}")
             last_sent_command = cmd
-            if ('alacakart' in globals()) and hasattr(alacakart, 'is_open') and alacakart.is_open:
+            if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
                 try:
                     alacakart.write((cmd + '\n').encode())
                 except Exception as e:

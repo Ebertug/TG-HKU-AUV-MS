@@ -1,14 +1,14 @@
 import cv2
 import numpy as np
 import configparser
-import ctypes
+
 
 CONFIG_FILE = 'config.txt'
 
 # Get screen size for maximized collage (with top bar visible)
-user32 = ctypes.windll.user32
-screen_width = user32.GetSystemMetrics(0)
-screen_height = user32.GetSystemMetrics(1)
+
+screen_width = 980
+screen_height = 720
 
 # Read video_file and parameter values from config
 config = configparser.ConfigParser()
