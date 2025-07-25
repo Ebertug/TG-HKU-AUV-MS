@@ -2,32 +2,35 @@ import cv2
 import numpy as np
 import configparser
 
+# Config dosyası yolu
+CONFIG_FILE = 'tg-hku-auv-ms/config.txt'
 
-CONFIG_FILE = 'config.txt'
-
-# Get screen size for maximized collage (with top bar visible)
-
-screen_width = 980
+# Görüntü penceresi boyutları
+screen_width = 960
 screen_height = 720
 
-# Read video_file and parameter values from config
+# Config dosyasını oku
 config = configparser.ConfigParser()
 config.read(CONFIG_FILE, encoding='utf-8')
+
 def get_config_str(section, key, default):
+    # Config dosyasından string değer oku
     try:
         return config[section][key]
     except Exception:
         return default
 
 def get_config_value(section, key, default, cast_func):
+    # Config dosyasından tip dönüşümü ile değer oku
     try:
         return cast_func(config[section][key])
     except Exception:
         return default
 
+# Video dosya adını al
 video_file = get_config_str('PARAMS', 'video_file', 'line-yatay.mp4')
 
-# Get initial values from config or use defaults
+# Parametreleri ve HSV değerlerini configten al
 params = {
     'blur_val': get_config_value('PARAMS', 'blur_val', 1, int),
     'contrast': get_config_value('PARAMS', 'contrast', 2.0, float),
@@ -44,9 +47,11 @@ hsv = {
 }
 
 def nothing(x):
+    # Trackbar callback fonksiyonu (gereksiz, placeholder)
     pass
 
 def save_config(params, hsv):
+    # Parametreleri ve HSV değerlerini config dosyasına kaydet
     config = configparser.ConfigParser()
     config['PARAMS'] = {k: str(params[k]) for k in params}
     config['PARAMS']['video_file'] = video_file
@@ -54,14 +59,13 @@ def save_config(params, hsv):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
         config.write(configfile)
 
-# Read first frame from video
+# Videodan örnek kareleri al
 cap = cv2.VideoCapture(video_file)
 ret, first_frame = cap.read()
 cap.release()
 if not ret:
     raise RuntimeError(f"Could not read first frame from {video_file}")
 
-# Read all sample frames (0, 130, 260, ...)
 cap = cv2.VideoCapture(video_file)
 frame_indices = []
 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -77,11 +81,11 @@ cap.release()
 if not frames:
     raise RuntimeError(f"Could not read any frames from {video_file}")
 
-# Create window
+# Ayar paneli penceresini oluştur
 cv2.namedWindow('Settings Panel')
 
-# Sliders (initial values from config)
-cv2.createTrackbar('Blur', 'Settings Panel', params['blur_val'], 31, nothing) # Should be odd
+# Trackbar'ları oluştur
+cv2.createTrackbar('Blur', 'Settings Panel', params['blur_val'], 31, nothing)
 cv2.createTrackbar('Contrast x10', 'Settings Panel', int(params['contrast']*10), 50, nothing)
 cv2.createTrackbar('Saturation x10', 'Settings Panel', int(params['saturation']*10), 50, nothing)
 cv2.createTrackbar('Brightness', 'Settings Panel', params['brightness'], 255, nothing)
@@ -94,10 +98,11 @@ cv2.createTrackbar('Upper S', 'Settings Panel', hsv['upper_s'], 255, nothing)
 cv2.createTrackbar('Upper V', 'Settings Panel', hsv['upper_v'], 255, nothing)
 
 while True:
-    # Her döngüde ekran boyutuna göre image_width ve image_height ayarla
+    # Ekran boyutunu ayarla
     image_height = screen_height
     image_width = screen_width // 2
 
+    # Trackbar'lardan güncel değerleri al
     blur_val = cv2.getTrackbarPos('Blur', 'Settings Panel')
     if blur_val % 2 == 0:
         blur_val += 1
@@ -112,6 +117,7 @@ while True:
     upper_s = cv2.getTrackbarPos('Upper S', 'Settings Panel')
     upper_v = cv2.getTrackbarPos('Upper V', 'Settings Panel')
 
+    # Parametreleri güncelle
     params['blur_val'] = blur_val
     params['contrast'] = contrast
     params['saturation'] = saturation
@@ -123,7 +129,7 @@ while True:
     hsv['upper_s'] = upper_s
     hsv['upper_v'] = upper_v
 
-    # For each sampled frame, apply settings and create collage row
+    # Her örnek kare için ayarları uygula ve kolaj oluştur
     collage_rows = []
     for frame in frames:
         frame_adj = cv2.convertScaleAbs(frame, alpha=contrast, beta=brightness)

@@ -5,37 +5,42 @@ import serial
 import threading
 import time
 
-# Read config file
+# Config dosyasını oku
 config = configparser.ConfigParser()
-config.read('tg-hku-auv-ms\config.txt', encoding='utf-8')
+config.read('tg-hku-auv-ms/config.txt', encoding='utf-8')
 
 def get_config_value(section, key, default, cast_func):
+    # Config dosyasından tip dönüşümü ile değer oku
     try:
         return cast_func(config[section][key])
     except Exception:
         return default
 
 def get_config_str(section, key, default):
+    # Config dosyasından string değer oku
     try:
         return config[section][key]
     except Exception:
         return default
 
+def str2bool(v):
+    # Stringi booleana çevir
+    return str(v).lower() in ("yes", "true", "1")
 
-# Get screen size for maximizing collage
+# Görüntü penceresi boyutları
+SCREEN_WIDTH = 960
+SCREEN_HEIGHT = 720
 
-screen_width = 960
-screen_height = 720
-
-# Get video file name from config
+# Video dosya adı
 video_file = get_config_str('PARAMS', 'video_file', 'line-yatay.mp4')
 
-# COMMUNICATION SETTINGS
-serial_enabled = get_config_value('COMM', 'serial_enabled', 1, int)
+# Seri iletişim ve port ayarları
+serial_enabled = get_config_value('COMM', 'serial_enabled', 1, str2bool)
 baud_rate = get_config_value('COMM', 'baud_rate', 57600, int)
 serial_port = get_config_str('COMM', 'serial_port', '/dev/ttyACM0')
 
 print(f"Serial enabled: {serial_enabled}")
+
 alacakart = None
 if serial_enabled:
     try:
@@ -44,21 +49,21 @@ if serial_enabled:
         time.sleep(6)
         alacakart.write(b'AB\n')
     except serial.SerialException as error:
-        print("Baud_rate: {}, Serial_port: {}".format(baud_rate, serial_port))
+        print(f"Baud_rate: {baud_rate}, Serial_port: {serial_port}")
         print(f"Error initializing serial communication: {error}")
 else:
-    print("Seri iletişim devre dışı (serial_enabled=False)")
+    print("Serial communication disabled (serial_enabled=False)")
 
-# Open video file
+# Video dosyasını aç
 cap = cv2.VideoCapture(video_file)
 
-# Main values for blur, contrast, saturation, brightness
+# Görüntü işleme parametreleri
 blur_val = get_config_value('PARAMS', 'blur_val', 1, int)
 contrast = get_config_value('PARAMS', 'contrast', 2.0, float)
 saturation = get_config_value('PARAMS', 'saturation', 0.0, float)
 brightness = get_config_value('PARAMS', 'brightness', 50, int)
 
-# Fixed lower and upper values for HSV
+# HSV renk aralığı
 lower = np.array([
     get_config_value('HSV', 'lower_h', 0, int),
     get_config_value('HSV', 'lower_s', 0, int),
@@ -70,8 +75,7 @@ upper = np.array([
     get_config_value('HSV', 'upper_v', 220, int)
 ])
 
-
-# Read movement commands from config
+# Hareket komutları
 commands = {
     'forward': get_config_str('COMMANDS', 'forward', ''),
     'turn_right': get_config_str('COMMANDS', 'turn_right', ''),
@@ -81,9 +85,6 @@ commands = {
     'stop': get_config_str('COMMANDS', 'stop', '')
 }
 
-
-
-# Shared command for serial thread
 direction = ""
 command_text = ""
 command_lock = threading.Lock()
@@ -91,40 +92,39 @@ last_sent_command = ""
 last_command_candidate = ""
 last_command_candidate_time = 0
 
-# Serial send thread function
+# Komutları seri porta ve terminale gönderen thread
 def serial_sender():
     global last_sent_command, last_command_candidate, last_command_candidate_time
     turn_waiting_hf = False
     while True:
-        time.sleep(0.05)  # daha hızlı kontrol için bekleme süresi azaltıldı
+        time.sleep(0.05)
         with command_lock:
             cmd = command_text
         if not cmd:
             continue
         cmd_stripped = cmd.strip()
-        # Eğer yeni komut önceki adaydan farklıysa, zamanı güncelle
+        # Komut değiştiyse 1 saniye boyunca sabit gelmesini bekle
         if last_command_candidate != cmd:
             last_command_candidate = cmd
             last_command_candidate_time = time.time()
-            continue  # 1 saniye dolmadan değerlendirme
-        # 1 saniye boyunca aynı komut geldiyse ve son gönderilen komuttan farklıysa gönder
+            continue
         if (time.time() - last_command_candidate_time) < 1.0:
             continue
         if last_sent_command == cmd:
             continue
-        # Eğer bir dönüş komutu gönderildiyse, HF gelene kadar başka komut gönderme
+        print(f"Command sent to vehicle: {cmd_stripped}")
+        # Dönüş komutları için HF bekleme mantığı
         if turn_waiting_hf:
             if cmd_stripped == commands['forward']:
-                # Komut değiştiyse önce stop gönder
                 if last_sent_command != cmd:
-                    print(f"[SERIAL] STOP komutu gönderildi: {commands['stop']}")
+                    print(f"[SERIAL] STOP command sent: {commands['stop']}")
                     if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
                         try:
                             alacakart.write((commands['stop'] + '\n').encode())
-                            time.sleep(0.5)  # AS komutundan sonra 0.5 sn bekle
+                            time.sleep(0.5)
                         except Exception as e:
                             print(f"Serial send error: {e}")
-                print(f"[SERIAL] Komut gönderildi: {cmd}")
+                print(f"[SERIAL] Command sent: {cmd}")
                 last_sent_command = cmd
                 turn_waiting_hf = False
                 if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
@@ -135,19 +135,17 @@ def serial_sender():
             else:
                 continue
         else:
-            # Eğer T 90 veya T -90 gönderiliyorsa, HF gelene kadar bekleyeceğiz
             if cmd_stripped in [commands['turn_right'], commands['turn_left']]:
                 turn_waiting_hf = True
-            # Komut değiştiyse önce stop gönder
             if last_sent_command != cmd:
-                print(f"[SERIAL] STOP komutu gönderildi: {commands['stop']}")
+                print(f"[SERIAL] STOP command sent: {commands['stop']}")
                 if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
                     try:
                         alacakart.write((commands['stop'] + '\n').encode())
-                        time.sleep(0.5)  # AS komutundan sonra 0.5 sn bekle
+                        time.sleep(0.5)
                     except Exception as e:
                         print(f"Serial send error: {e}")
-            print(f"[SERIAL] Komut gönderildi: {cmd}")
+            print(f"[SERIAL] Command sent: {cmd}")
             last_sent_command = cmd
             if serial_enabled and alacakart is not None and hasattr(alacakart, 'is_open') and alacakart.is_open:
                 try:
@@ -155,18 +153,12 @@ def serial_sender():
                 except Exception as e:
                     print(f"Serial send error: {e}")
 
+# Komut gönderim threadini başlat
 serial_thread = threading.Thread(target=serial_sender, daemon=True)
 serial_thread.start()
 
-# Get output video file name from config
+# Çıktı video dosya adı
 output_video_file = get_config_str('PARAMS', 'output_video', 'output_segmented.mp4')
-
-# VideoWriter ayarları
-#fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-#out_fps = cap.get(cv2.CAP_PROP_FPS)
-#frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-#frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-#out = cv2.VideoWriter(output_video_file, fourcc, out_fps, (frame_width, frame_height))
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -175,18 +167,18 @@ while cap.isOpened():
 
     frame_h, frame_w = frame.shape[:2]
 
-    # BOX COORDINATES
+    # Kırmızı, mavi ve yeşil kutuların koordinatları
     red_box = (int(frame_w*0.35), int(frame_h*0.1), int(frame_w*0.3), int(frame_h*0.2))
     blue_box = (int(frame_w*0.1), int(frame_h*0.4), int(frame_w*0.2), int(frame_h*0.2))
     green_box = (int(frame_w*0.7), int(frame_h*0.4), int(frame_w*0.2), int(frame_h*0.2))
 
-    # Tolerance box (a small box in the center of the red box)
+    # Tolerans kutusu (kırmızı kutunun ortasında küçük bir kutu)
     tol_w, tol_h = int(red_box[2]*0.3), int(red_box[3]*0.5)
     tol_x = red_box[0] + (red_box[2] - tol_w)//2
     tol_y = red_box[1] + (red_box[3] - tol_h)//2
     tolerance_box = (tol_x, tol_y, tol_w, tol_h)
 
-    # Image processing
+    # Görüntü işleme
     frame_adj = cv2.convertScaleAbs(frame, alpha=contrast, beta=brightness)
     hsv_img = cv2.cvtColor(frame_adj, cv2.COLOR_BGR2HSV).astype(np.float32)
     hsv_img[...,1] = np.clip(hsv_img[...,1] * saturation, 0, 255)
@@ -197,7 +189,7 @@ while cap.isOpened():
     hsv_img = cv2.cvtColor(frame_adj, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv_img, lower, upper)
 
-    # Find and merge contours
+    # Kontur bulma ve birleştirme
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     combined_mask = np.zeros_like(mask)
     for cnt in contours:
@@ -209,13 +201,13 @@ while cap.isOpened():
     output = frame.copy()
     cv2.drawContours(output, combined_contours, -1, (0, 255, 0), 2)
 
-    # DRAW BOXES
+    # Kutuları çiz
     cv2.rectangle(output, (red_box[0], red_box[1]), (red_box[0]+red_box[2], red_box[1]+red_box[3]), (0,0,255), 2)
     cv2.rectangle(output, (blue_box[0], blue_box[1]), (blue_box[0]+blue_box[2], blue_box[1]+blue_box[3]), (255,0,0), 2)
     cv2.rectangle(output, (green_box[0], green_box[1]), (green_box[0]+green_box[2], green_box[1]+green_box[3]), (0,255,0), 2)
     cv2.rectangle(output, (tolerance_box[0], tolerance_box[1]), (tolerance_box[0]+tolerance_box[2], tolerance_box[1]+tolerance_box[3]), (0,0,255), 1)
 
-    # AREA CHECK
+    # Alan kontrolleri
     red_area = combined_mask[red_box[1]:red_box[1]+red_box[3], red_box[0]:red_box[0]+red_box[2]]
     blue_area = combined_mask[blue_box[1]:blue_box[1]+blue_box[3], blue_box[0]:blue_box[0]+blue_box[2]]
     green_area = combined_mask[green_box[1]:green_box[1]+green_box[3], green_box[0]:green_box[0]+green_box[2]]
@@ -224,15 +216,13 @@ while cap.isOpened():
     new_direction = ""
     new_command_text = ""
 
-    # Is there an area in the red box?
+    # Kırmızı kutuda alan var mı?
     if cv2.countNonZero(red_area) > 0:
-        # Vertical center point of segmentation in the red box
         red_mask = np.zeros_like(combined_mask)
         red_mask[red_box[1]:red_box[1]+red_box[3], red_box[0]:red_box[0]+red_box[2]] = red_area
         moments = cv2.moments(red_mask)
         if moments["m00"] > 0:
             cx = int(moments["m10"] / moments["m00"])
-            # X range of the tolerance box
             tol_left = tolerance_box[0]
             tol_right = tolerance_box[0] + tolerance_box[2]
             if tol_left <= cx <= tol_right and cv2.countNonZero(tol_area) > 0:
@@ -248,7 +238,7 @@ while cap.isOpened():
             new_direction = "forward"
             new_command_text = commands['forward']
     else:
-        # If there is no area in red, check green and blue
+        # Kırmızı yoksa yeşil ve maviye bak
         if cv2.countNonZero(green_area) > 0:
             new_direction = "right"
             new_command_text = commands['turn_right']
@@ -256,36 +246,32 @@ while cap.isOpened():
             new_direction = "left"
             new_command_text = commands['turn_left']
 
+    # Komutları thread ile paylaş
     with command_lock:
         direction = new_direction
         command_text = new_command_text
 
     if direction:
         cv2.putText(output, direction, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, (0,0,255), 4)
-        # Komut yazısı sadece son gönderilen komut (yeşil) olarak (50, 120)'de gösterilecek
         if last_sent_command:
             cv2.putText(output, f"Sent: {last_sent_command}", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,255,0), 3)
 
-    # Collage: output and combined_mask side by side, maximized window
+    # Kolaj oluştur ve göster
     mask_color = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
-    image_height = screen_height
-    image_width = screen_width // 2
+    image_height = SCREEN_HEIGHT
+    image_width = SCREEN_WIDTH // 2
     output_resized = cv2.resize(output, (image_width, image_height))
     mask_resized = cv2.resize(mask_color, (image_width, image_height))
     collage = np.hstack([output_resized, mask_resized])
-    # Show last sent command on collage
     if last_sent_command:
         cv2.putText(collage, f"Sent: {last_sent_command}", (50, image_height-50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,255,0), 3)
     cv2.namedWindow('Line Follower Collage', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Line Follower Collage', screen_width, screen_height)
+    cv2.resizeWindow('Line Follower Collage', SCREEN_WIDTH, SCREEN_HEIGHT)
     cv2.moveWindow('Line Follower Collage', 0, 0)
     cv2.imshow('Line Follower Collage', collage)
-    # Videoya kaydet
-    #out.write(output)
 
     if cv2.waitKey(30) & 0xFF == ord('q'):
         break
 
 cap.release()
-#out.release()
 cv2.destroyAllWindows()
